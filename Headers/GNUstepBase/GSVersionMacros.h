@@ -390,12 +390,12 @@ static inline void gs_consumed(id NS_CONSUMED GS_UNUSED_ARG o) { return; }
  * support or not.
  */
 #if __has_feature(blocks)
-#  if	OBJC2RUNTIME
-#    if __has_include(<Block.h>)
-#      include <Block.h>
-#    else
-#      include <objc/blocks_runtime.h>
-#    endif
+#  if defined(__wasm__)
+#    include <objc/blocks_runtime.h>
+#  elif __has_include(<Block.h>)
+#    include <Block.h>
+#  elif OBJC2RUNTIME
+#    include <objc/blocks_runtime.h>
 #  else
 #    include <ObjectiveC2/blocks_runtime.h>
 #  endif
