@@ -140,6 +140,10 @@ static IMP autorelease_imp;
 
 static SEL finalize_sel;
 static IMP finalize_imp;
+
+#ifdef __wasm__
+typedef void (*GSVoidMethodIMP)(id, SEL);
+#endif
 static Class	NSConstantStringClass;
 
 @class	NSDataMalloc;
@@ -800,7 +804,11 @@ callCXXConstructors(Class aClass, id anObject)
       constructor = class_getMethodImplementation(aClass, cxx_construct);
       if (calledConstructor != constructor)
         {
+#ifdef __wasm__
+          ((GSVoidMethodIMP)constructor)(anObject, cxx_construct);
+#else
           constructor(anObject, cxx_construct);
+#endif
         }
     }
   return constructor;
@@ -869,7 +877,11 @@ NSDeallocateObject(id anObject)
 
       /* Call the default finalizer to handle C++ destructors.
        */
+#ifdef __wasm__
+      ((GSVoidMethodIMP)finalize_imp)(anObject, finalize_sel);
+#else
       (*finalize_imp)(anObject, finalize_sel);
+#endif
 
 #ifndef OBJC_CAP_ARC
       if (GSPrivateMarkedAssociations(anObject, NO))
@@ -1894,7 +1906,12 @@ static id gs_weak_load(id obj)
 	  release_count, retain_count];
     }
 
+#ifdef __wasm__
+  ((void (*)(id, SEL, id))autorelease_imp)
+    (autorelease_class, autorelease_sel, self);
+#else
   (*autorelease_imp)(autorelease_class, autorelease_sel, self);
+#endif
   return self;
 }
 

@@ -210,7 +210,7 @@ pty_slave(const char* name)
 
   slave = open(name, O_RDWR);
 #ifdef	HAVE_SYS_STROPTS_H
-#ifdef	HAVE_PTS_STREAM_MODULES
+#if	HAVE_PTS_STREAM_MODULES
   if (slave >= 0 && isastream(slave))
     {
       if (ioctl(slave, I_PUSH, "ptem") < 0)
