@@ -1,3 +1,34 @@
+2026-08-13 Todd White <todd.white@thalion.global>
+
+	* Source/NSNotificationCenter.m: Post under a lock chosen by the
+	notification name, so that posts of different names do not
+	serialise against each other.  The one table lock becomes an array
+	of stripes which lockNCTable takes in full and in order, so it
+	means what it meant before and every other caller is unchanged.
+	Observations registered with no name get a lock of their own,
+	consulted only where such an observation exists, and the free list
+	shared by the stripes is guarded where it is pushed.
+	* Source/NSUserDefaults.m: Post NSUserDefaultsDidChangeNotification
+	from the methods which alter what a lookup can see and posted
+	nothing: addSuiteNamed:, removeSuiteNamed:, setSearchList:,
+	setVolatileDomain:forName:, removeVolatileDomainForName: and
+	registerDefaults:.
+	* Tests/base/NSUserDefaults/notifications.m: New test that each of
+	those methods posts the notification.
+  
+2026-08-14 Richard Frith-Macdonald <rfm@gnu.org>
+
+	* Headers/Foundation/NSPathUtilities.h:
+	* Headers/GNUstepBase/config.h.in:
+	* Source/NSBundle.m:
+	* Source/NSPathUtilities.m:
+	* configure:
+	* configure.ac:
+	* standalone.conf:
+	Update to match gnustep-make changes for resource location config.
+	Add path utilitites option GSResourcesDirectory to locate resources
+	stored outside app bundles (use it for tool bundles).
+
 2026-08-12 Todd White <todd.white@thalion.global>
 
 	* Source/NSBundle.m: Let a thread reuse the localization table it
@@ -7,6 +38,7 @@
 	-infoDictionary with the same lock, and take it in
 	-cleanPathCache, which destroyed the information dictionary and
 	the localization tables without it.
+
 2026-08-12 Todd White <todd.white@thalion.global>
 
 	* Source/NSNotificationCenter.m: Take the table lock for the

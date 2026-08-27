@@ -37,7 +37,7 @@
 #import <Foundation/NSOperation.h>
 #import <Foundation/NSProgress.h>
 #import <Foundation/NSDate.h>
-
+#import <GNUstepBase/GSBlocks.h>
 #if GS_HAVE_NSURLSESSION
 #if OS_API_VERSION(MAC_OS_X_VERSION_10_9, GS_API_LATEST)
 
@@ -46,6 +46,8 @@
 
 @class NSError;
 @class NSHTTPURLResponse;
+@class NSInputStream;
+@class NSMutableData;
 @class NSOperationQueue;
 @class NSURL;
 @class NSURLAuthenticationChallenge;
@@ -59,16 +61,49 @@
 @class NSURLSessionDataTask;
 @class NSURLSessionUploadTask;
 @class NSURLSessionDownloadTask;
+#if GS_HAVE_NSURLSESSION_WEBSOCKETS
+@class NSURLSessionWebSocketTask;
+#endif
 
 NS_ASSUME_NONNULL_BEGIN
 
-typedef void (^GSNSURLSessionDataCompletionHandler)(
-  NSData *_Nullable data, NSURLResponse *_Nullable response,
-  NSError *_Nullable error);
+DEFINE_BLOCK_TYPE(GSNSURLSessionDataCompletionHandler, void,
+  NSData *_Nullable, NSURLResponse *_Nullable, NSError *_Nullable);
 
-typedef void (^GSNSURLSessionDownloadCompletionHandler)(
-  NSURL *_Nullable location, NSURLResponse *_Nullable response,
-  NSError *_Nullable error);
+DEFINE_BLOCK_TYPE(GSNSURLSessionDownloadCompletionHandler, void,
+  NSURL *_Nullable, NSURLResponse *_Nullable, NSError *_Nullable);
+
+DEFINE_BLOCK_TYPE(GSNSURLSessionTasksCompletionHandler, void,
+  GS_GENERIC_CLASS(NSArray, NSURLSessionDataTask *) *,
+  GS_GENERIC_CLASS(NSArray, NSURLSessionUploadTask *) *,
+  GS_GENERIC_CLASS(NSArray, NSURLSessionDownloadTask *) *);
+
+DEFINE_BLOCK_TYPE(GSNSURLSessionAllTasksCompletionHandler, void,
+  GS_GENERIC_CLASS(NSArray, __kindof NSURLSessionTask *) *);
+
+DEFINE_BLOCK_TYPE(GSNSURLSessionRedirectHandler, void, NSURLRequest *);
+
+DEFINE_BLOCK_TYPE(GSNSURLSessionBodyStreamHandler, void, NSInputStream *);
+
+typedef NS_ENUM(NSInteger, NSURLSessionResponseDisposition) {
+  NSURLSessionResponseCancel = 0,
+  NSURLSessionResponseAllow = 1,
+  NSURLSessionResponseBecomeDownload = 2,
+  NSURLSessionResponseBecomeStream = 3
+};
+
+typedef NS_ENUM(NSInteger, NSURLSessionAuthChallengeDisposition) {
+  NSURLSessionAuthChallengeUseCredential = 0,
+  NSURLSessionAuthChallengePerformDefaultHandling = 1,
+  NSURLSessionAuthChallengeCancelAuthenticationChallenge = 2,
+  NSURLSessionAuthChallengeRejectProtectionSpace = 3
+};
+
+DEFINE_BLOCK_TYPE(GSNSURLSessionResponseDispositionHandler, void,
+  NSURLSessionResponseDisposition);
+
+DEFINE_BLOCK_TYPE(GSNSURLSessionChallengeHandler, void,
+  NSURLSessionAuthChallengeDisposition, NSURLCredential *);
 
 /**
  * NSURLSession is a replacement API for NSURLConnection.  It provides
@@ -98,12 +133,19 @@ typedef void (^GSNSURLSessionDownloadCompletionHandler)(
 GS_EXPORT_CLASS
 @interface NSURLSession : NSObject
 {
-@private
-  NSOperationQueue          *_delegateQueue;
-  id<NSURLSessionDelegate>   _delegate;
-  NSURLSessionConfiguration *_configuration;
-
-  NSString *_sessionDescription;
+#if	GS_NONFRAGILE
+#  if	defined(GS_NSURLSession_IVARS)
+@public
+GS_NSURLSession_IVARS;
+#  endif
+#else
+  /* Pointer to private additional data used to avoid breaking ABI
+   * when we don't have the non-fragile ABI available.
+   * Use this mechanism rather than changing the instance variable
+   * layout (see Source/GSInternal.h for details).
+   */
+@private id _internal GS_UNUSED_IVAR;
+#endif
 }
 
 + (NSURLSession *) sharedSession;
@@ -118,8 +160,8 @@ GS_EXPORT_CLASS
  */
 + (NSURLSession *) sessionWithConfiguration:
   (NSURLSessionConfiguration *)configuration
-  delegate: (nullable id<NSURLSessionDelegate>)delegate
-  delegateQueue: (nullable NSOperationQueue *)queue;
+  delegate: (id<NSURLSessionDelegate> _Nullable)delegate
+  delegateQueue: (NSOperationQueue * _Nullable)queue;
 
 /** -finishTasksAndInvalidate returns immediately and existing tasks will be
  * allowed to run to completion.  New tasks may not be created.  The session
@@ -168,14 +210,47 @@ GS_EXPORT_CLASS
 
 - (NSURLSessionDownloadTask *) downloadTaskWithResumeData: (NSData *)resumeData;
 
-- (void) getTasksWithCompletionHandler:
-  (void (^)(NSArray<NSURLSessionDataTask *> *dataTasks,
-    NSArray<NSURLSessionUploadTask *> *uploadTasks,
-    NSArray<NSURLSessionDownloadTask *> *downloadTasks)) completionHandler;
+/**
+ * Returns every task the session currently holds.  Use this in preference to
+ * -getAllTasksWithCompletionHandler:, which requires a compiler with blocks.
+ */
+- (GS_GENERIC_CLASS(NSArray, NSURLSessionTask *) *) allTasks;
 
+#if GS_HAVE_NSURLSESSION_WEBSOCKETS
+/* Creates a WebSocket task to download the contents of the given URL. */
+- (NSURLSessionWebSocketTask *) webSocketTaskWithURL: (NSURL *)url;
+
+/* Creates a WebSocket task to download the contents of the given URL
+ * and an Array of strings to negotiate the WebSocket protocol with the server
+ */
+- (NSURLSessionWebSocketTask *) webSocketTaskWithURL: (NSURL *)url
+                                          protocols:
+  (GS_GENERIC_CLASS(NSArray, NSString *) *)protocols;
+
+/* Creates a WebSocket task with the given request. */
+- (NSURLSessionWebSocketTask *) webSocketTaskWithRequest: (NSURLRequest *)request;
+#endif
+
+/**
+ * Returns the tasks the session currently holds which are a kind of aClass.
+ * Use this in preference to -getTasksWithCompletionHandler:, which requires a
+ * compiler with blocks.
+ */
+- (GS_GENERIC_CLASS(NSArray, NSURLSessionTask *) *) tasksOfKind: (Class)aClass;
+
+/**
+ * Deprecated: use -allTasks and -tasksOfKind: instead.  The completion
+ * handler is called before this method returns.
+ */
+- (void) getTasksWithCompletionHandler:
+  (GSNSURLSessionTasksCompletionHandler)completionHandler GS_DEPRECATED;
+
+/**
+ * Deprecated: use -allTasks instead.  The completion handler is called
+ * before this method returns.
+ */
 - (void) getAllTasksWithCompletionHandler:
-  (void (^)(GS_GENERIC_CLASS(NSArray, __kindof NSURLSessionTask *) * tasks))
-    completionHandler;
+  (GSNSURLSessionAllTasksCompletionHandler)completionHandler GS_DEPRECATED;
 
 /**
  * This serial NSOperationQueue queue is used for dispatching delegate messages
@@ -189,7 +264,7 @@ GS_EXPORT_CLASS
  *
  * The session keeps a strong reference to the delegate.
  */
-- (nullable id<NSURLSessionDelegate>) delegate;
+- (id<NSURLSessionDelegate> _Nullable) delegate;
 
 /**
  * The configuration object used to create the session.
@@ -203,7 +278,7 @@ GS_EXPORT_CLASS
 /**
  * An App-specific description of the session.
  */
-- (nullable NSString *) sessionDescription;
+- (NSString * _Nullable) sessionDescription;
 
 /**
  * Sets an app-specific description of the session.
@@ -285,26 +360,19 @@ GS_EXPORT const int64_t NSURLSessionTransferSizeUnknown;
 GS_EXPORT_CLASS
 @interface NSURLSessionTask : NSObject <NSCopying, NSProgressReporting>
 {
-  NSUInteger    _taskIdentifier;
-  NSURLRequest *_originalRequest;
-
-  id<NSURLSessionTaskDelegate> _delegate;
-  NSURLSessionTaskState        _state;
-  NSURLRequest                *_currentRequest;
-  NSURLResponse               *_response;
-  NSProgress                  *_progress;
-  NSDate                      *_earliestBeginDate;
-
-  _Atomic(int64_t) _countOfBytesClientExpectsToSend;
-  _Atomic(int64_t) _countOfBytesClientExpectsToReceive;
-  _Atomic(int64_t) _countOfBytesSent;
-  _Atomic(int64_t) _countOfBytesReceived;
-  _Atomic(int64_t) _countOfBytesExpectedToSend;
-  _Atomic(int64_t) _countOfBytesExpectedToReceive;
-  _Atomic(double)  _priority;
-
-  NSString *_taskDescription;
-  NSError  *_error;
+#if	GS_NONFRAGILE
+#  if	defined(GS_NSURLSessionTask_IVARS)
+@public
+GS_NSURLSessionTask_IVARS;
+#  endif
+#else
+  /* Pointer to private additional data used to avoid breaking ABI
+   * when we don't have the non-fragile ABI available.
+   * Use this mechanism rather than changing the instance variable
+   * layout (see Source/GSInternal.h for details).
+   */
+@private id _internal GS_UNUSED_IVAR;
+#endif
 }
 
 /**
@@ -319,24 +387,44 @@ GS_EXPORT_CLASS
 - (int64_t) countOfBytesExpectedToReceive;
 - (int64_t) countOfBytesExpectedToSend;
 
-- (nullable NSURLRequest *) currentRequest;
-- (nullable id<NSURLSessionTaskDelegate>) delegate;
-- (nullable NSDate *) earliestBeginDate;
-- (nullable NSError *) error;
-- (nullable NSURLRequest *) originalRequest;
+- (NSURLRequest * _Nullable) currentRequest;
+- (id<NSURLSessionTaskDelegate> _Nullable) delegate;
+- (NSDate * _Nullable) earliestBeginDate;
+- (NSError * _Nullable) error;
+- (NSURLRequest * _Nullable) originalRequest;
 - (float) priority;
 - (NSProgress *) progress;
-- (nullable NSURLResponse *) response;
+- (NSURLResponse * _Nullable) response;
 - (void) resume;
 
-- (void) setDelegate: (nullable id<NSURLSessionTaskDelegate>)delegate;
-- (void) setEarliestBeginDate: (nullable NSDate *)date;
+/**
+ * Answers URLSession:task:willRedirectToResponse:newRequest:.  Pass the
+ * request to follow, or nil to refuse the redirection.  May be sent at any
+ * time and from any thread.
+ */
+- (void) resumeWithRedirectRequest: (NSURLRequest * _Nullable)request;
+
+/**
+ * Answers URLSession:taskNeedsNewBodyStream:.  May be sent at any time and
+ * from any thread.
+ */
+- (void) resumeWithBodyStream: (NSInputStream * _Nullable)bodyStream;
+
+/**
+ * Answers URLSession:dataTask:didReceiveResponse:, and so is only meaningful
+ * for a data task.  May be sent at any time and from any thread.
+ */
+- (void) resumeWithResponseDisposition:
+  (NSURLSessionResponseDisposition)disposition;
+
+- (void) setDelegate: (id<NSURLSessionTaskDelegate> _Nullable)delegate;
+- (void) setEarliestBeginDate: (NSDate * _Nullable)date;
 - (void) setPriority: (float)priority;
 
 /**
  * Sets an app-specific description of the task.
  */
-- (void) setTaskDescription: (nullable NSString *)description;
+- (void) setTaskDescription: (NSString * _Nullable)description;
 
 - (NSURLSessionTaskState) state;
 - (void) suspend;
@@ -344,7 +432,7 @@ GS_EXPORT_CLASS
 /**
  * App-specific description of the task.
  */
-- (nullable NSString *) taskDescription;
+- (NSString * _Nullable) taskDescription;
 
 - (NSUInteger) taskIdentifier;
 
@@ -372,6 +460,86 @@ GS_EXPORT_CLASS
 #if OS_API_VERSION(MAC_OS_X_VERSION_10_11, GS_API_LATEST)
 GS_EXPORT_CLASS
 @interface NSURLSessionStreamTask : NSURLSessionTask
+@end
+#endif
+
+typedef  NS_ENUM(NSInteger, NSURLSessionWebSocketCloseCode) {
+  // A code that indicates the connection is still open.
+  NSURLSessionWebSocketCloseCodeInvalid = 0,
+  // A code that indicates normal connection closure.
+  NSURLSessionWebSocketCloseCodeNormalClosure = 1000,
+  // A code that indicates an endpoint is going away.
+  NSURLSessionWebSocketCloseCodeGoingAway = 1001,
+  // A code that indicates an endpoint terminated the connection due to a protocol error.
+  NSURLSessionWebSocketCloseCodeProtocolError = 1002,
+  // A code that indicates an endpoint terminated the connection after receiving a type of data it can’t accept.
+  NSURLSessionWebSocketCloseCodeUnsupportedData = 1003,
+  // A reserved code that indicates an endpoint expected a status code and didn’t receive one.
+  NSURLSessionWebSocketCloseCodeNoStatusReceived = 1005,
+  // A reserved code that indicates the connection closed without a close control frame.
+  NSURLSessionWebSocketCloseCodeAbnormalClosure = 1006,
+  // A code that indicates the server terminated the connection because it received data inconsistent with the message’s type.
+  NSURLSessionWebSocketCloseCodeInvalidFramePayloadData = 1007,
+  // A code that indicates an endpoint terminated the connection because it received a message that violates its policy.
+  NSURLSessionWebSocketCloseCodePolicyViolation = 1008,
+  // A code that indicates an endpoint is terminating the connection because it received a message too big for it to process.
+  NSURLSessionWebSocketCloseCodeMessageTooBig = 1009,
+  // A code that indicates the client terminated the connection because the server didn’t negotiate a required extension.
+  NSURLSessionWebSocketCloseCodeMandatoryExtensionMissing = 1010,
+  // A code that indicates the server terminated the connection because it encountered an unexpected condition.
+  NSURLSessionWebSocketCloseCodeInternalServerError = 1011,
+  // A reserved code that indicates the connection closed due to the failure to perform a TLS handshake.
+  NSURLSessionWebSocketCloseCodeTLSHandshakeFailure = 1015,
+};
+
+#if GS_HAVE_NSURLSESSION_WEBSOCKETS
+typedef NS_ENUM(NSInteger, NSURLSessionWebSocketMessageType) {
+  NSURLSessionWebSocketMessageTypeData = 0,
+  NSURLSessionWebSocketMessageTypeString = 1,
+};
+
+GS_EXPORT_CLASS
+@interface NSURLSessionWebSocketMessage : NSObject
+{
+  NSURLSessionWebSocketMessageType _type;
+  NSData *_data;
+  NSString *_string;
+}
+
+- (instancetype) initWithData: (NSData *)data;
+- (instancetype) initWithString: (NSString *)string;
+
+- (NSURLSessionWebSocketMessageType) type;
+- (NSData * _Nullable) data;
+- (NSString * _Nullable) string;
+@end
+
+GS_EXPORT_CLASS
+@interface NSURLSessionWebSocketTask : NSURLSessionTask
+{
+#if GS_NONFRAGILE
+# if defined(GS_NSURLSessionWebSocketTask_IVARS)
+@public GS_NSURLSessionWebSocketTask_IVARS
+# endif
+#else
+@private id _internal GS_UNUSED_IVAR;
+#endif
+}
+
+- (void) cancelWithCloseCode: (NSURLSessionWebSocketCloseCode)closeCode
+                      reason: (NSData * _Nullable)reason;
+- (void) sendMessage: (NSURLSessionWebSocketMessage *)message
+   completionHandler: (void (^)(NSError *_Nullable error))completionHandler;
+- (void) receiveMessageWithCompletionHandler:
+  (void (^)(NSURLSessionWebSocketMessage *_Nullable message,
+    NSError *_Nullable error))completionHandler;
+- (void) sendPingWithPongReceiveHandler:
+  (void (^)(NSError *_Nullable error))pongReceiveHandler;
+
+- (NSInteger) maximumMessageSize;
+- (void) setMaximumMessageSize: (NSInteger)maximumMessageSize;
+- (NSURLSessionWebSocketCloseCode) closeCode;
+- (NSData * _Nullable) closeReason;
 @end
 #endif
 
@@ -406,12 +574,12 @@ GS_EXPORT_CLASS
 
 - (NSURLRequest *) configureRequest: (NSURLRequest *)request;
 
-- (nullable NSDictionary *) HTTPAdditionalHeaders;
+- (NSDictionary * _Nullable) HTTPAdditionalHeaders;
 - (NSHTTPCookieAcceptPolicy) HTTPCookieAcceptPolicy;
-- (nullable NSHTTPCookieStorage *) HTTPCookieStorage;
+- (NSHTTPCookieStorage * _Nullable) HTTPCookieStorage;
 - (NSInteger) HTTPMaximumConnectionsPerHost;
 
-- (nullable NSString *) identifier;
+- (NSString * _Nullable) identifier;
 
 /**
  * Indicates whether the session should set cookies.
@@ -439,7 +607,7 @@ GS_EXPORT_CLASS
  */
 - (BOOL) HTTPShouldUsePipelining;
 
-- (nullable NSArray *) protocolClasses;
+- (NSArray * _Nullable) protocolClasses;
 
 - (NSURLRequestCachePolicy) requestCachePolicy;
 
@@ -508,8 +676,8 @@ GS_EXPORT_CLASS
 - (NSTimeInterval) timeoutIntervalForResource;
 
 
-- (nullable NSURLCache *) URLCache;
-- (nullable NSURLCredentialStorage *) URLCredentialStorage;
+- (NSURLCache * _Nullable) URLCache;
+- (NSURLCredentialStorage * _Nullable) URLCredentialStorage;
 
 #if !NO_GNUSTEP
 /** Permits a session to be configured so that older connections are reused.
@@ -523,20 +691,6 @@ GS_EXPORT_CLASS
 
 @end
 
-typedef NS_ENUM(NSInteger, NSURLSessionAuthChallengeDisposition) {
-  NSURLSessionAuthChallengeUseCredential = 0,
-  NSURLSessionAuthChallengePerformDefaultHandling = 1,
-  NSURLSessionAuthChallengeCancelAuthenticationChallenge = 2,
-  NSURLSessionAuthChallengeRejectProtectionSpace = 3
-};
-
-typedef NS_ENUM(NSInteger, NSURLSessionResponseDisposition) {
-  NSURLSessionResponseCancel = 0,
-  NSURLSessionResponseAllow = 1,
-  NSURLSessionResponseBecomeDownload = 2,
-  NSURLSessionResponseBecomeStream = 3
-};
-
 @protocol NSURLSessionDelegate <NSObject>
 @optional
 /* The last message a session receives.  A session will only become
@@ -544,16 +698,14 @@ typedef NS_ENUM(NSInteger, NSURLSessionResponseDisposition) {
  * explicitly invalidated, in which case the error parameter will be nil.
  */
 - (void) URLSession: (NSURLSession *)session
-  didBecomeInvalidWithError: (nullable NSError *)error;
+  didBecomeInvalidWithError: (NSError * _Nullable)error;
 
 /* Implementing this method permits a delegate to provide authentication
  * credentials in response to a challenge from the remote server.
  */
 - (void) URLSession: (NSURLSession *)session
   didReceiveChallenge: (NSURLAuthenticationChallenge *)challenge
-  completionHandler:
-      (void (^)(NSURLSessionAuthChallengeDisposition disposition,
-                NSURLCredential                     *credential))handler;
+  completionHandler: (GSNSURLSessionChallengeHandler)handler;
 
 @end
 
@@ -570,7 +722,7 @@ typedef NS_ENUM(NSInteger, NSURLSessionResponseDisposition) {
  */
 - (void) URLSession: (NSURLSession *)session
   task: (NSURLSessionTask *)task
-  didCompleteWithError: (nullable NSError *)error;
+  didCompleteWithError: (NSError * _Nullable)error;
 
 /* Called to request authentication credentials from the delegate when
  * an authentication request is received from the server which is specific
@@ -579,8 +731,7 @@ typedef NS_ENUM(NSInteger, NSURLSessionResponseDisposition) {
 - (void) URLSession: (NSURLSession *)session
   task: (NSURLSessionTask *)task
   didReceiveChallenge: (NSURLAuthenticationChallenge *)challenge
-  completionHandler: (void (^)(NSURLSessionAuthChallengeDisposition disposition,
-    NSURLCredential *credential))handler;
+  completionHandler: (GSNSURLSessionChallengeHandler)handler;
 
 /* Periodically informs the delegate of the progress of sending body content
  * to the server.
@@ -599,17 +750,61 @@ typedef NS_ENUM(NSInteger, NSURLSessionResponseDisposition) {
  * is to follow redirections.
  *
  */
+/* Deprecated: implement URLSession:task:willRedirectToResponse:newRequest:
+ * instead.  This method requires a compiler with blocks and is not looked
+ * for by a library built without them.
+ */
 - (void) URLSession: (NSURLSession *)session
   task: (NSURLSessionTask *)task
   willPerformHTTPRedirection: (NSHTTPURLResponse *)response
   newRequest: (NSURLRequest *)request
-  completionHandler: (void (^)(NSURLRequest *))completionHandler;
+  completionHandler: (GSNSURLSessionRedirectHandler)completionHandler
+  GS_DEPRECATED;
 
+/* An HTTP request is attempting to perform a redirection to a different URL.
+ * Reply by sending -resumeWithRedirectRequest: to the task, with the request
+ * to follow, or nil to refuse the redirection and have the body of the
+ * redirection response delivered as the payload of this request.  The reply
+ * may be sent at any time and from any thread.
+ */
 - (void) URLSession: (NSURLSession *)session
   task: (NSURLSessionTask *)task
-  needNewBodyStream: (void (^)(NSInputStream *bodyStream))completionHandler;
+  willRedirectToResponse: (NSHTTPURLResponse *)response
+  newRequest: (NSURLRequest *)request;
+
+/* Deprecated: implement URLSession:taskNeedsNewBodyStream: instead.  This
+ * method requires a compiler with blocks and is not looked for by a library
+ * built without them.
+ */
+- (void) URLSession: (NSURLSession *)session
+  task: (NSURLSessionTask *)task
+  needNewBodyStream: (GSNSURLSessionBodyStreamHandler)completionHandler
+  GS_DEPRECATED;
+
+/* A new body stream is needed to continue the upload.  Reply by sending
+ * -resumeWithBodyStream: to the task.  The reply may be sent at any time and
+ * from any thread.
+ */
+- (void) URLSession: (NSURLSession *)session
+  taskNeedsNewBodyStream: (NSURLSessionTask *)task;
 
 @end
+
+#if GS_HAVE_NSURLSESSION_WEBSOCKETS
+@protocol NSURLSessionWebSocketDelegate <NSURLSessionTaskDelegate>
+@optional
+
+- (void) URLSession: (NSURLSession *)session
+  webSocketTask: (NSURLSessionWebSocketTask *)webSocketTask
+  didOpenWithProtocol: (NSString * _Nullable)protocol;
+
+- (void) URLSession: (NSURLSession *)session
+  webSocketTask: (NSURLSessionWebSocketTask *)webSocketTask
+  didCloseWithCode: (NSURLSessionWebSocketCloseCode)closeCode
+  reason: (NSData * _Nullable)reason;
+
+@end
+#endif
 
 @protocol NSURLSessionDataDelegate <NSURLSessionTaskDelegate>
 @optional
@@ -619,14 +814,24 @@ typedef NS_ENUM(NSInteger, NSURLSessionResponseDisposition) {
   dataTask: (NSURLSessionDataTask *)dataTask
   didReceiveData: (NSData *)data;
 
-/** Informs the delegate of a response.  This message is sent when all the
- * response headers have arrived, before the body of the response arrives.
+/** Deprecated: implement URLSession:dataTask:didReceiveResponse: instead.
+ * This method requires a compiler with blocks and is not looked for by a
+ * library built without them.
  */
 - (void) URLSession: (NSURLSession *)session
   dataTask: (NSURLSessionDataTask *)dataTask
   didReceiveResponse: (NSURLResponse *)response
-  completionHandler:
-    (void (^)(NSURLSessionResponseDisposition disposition))completionHandler;
+  completionHandler: (GSNSURLSessionResponseDispositionHandler)completionHandler
+  GS_DEPRECATED;
+
+/** Informs the delegate of a response.  This message is sent when all the
+ * response headers have arrived, before the body of the response arrives.
+ * Reply by sending -resumeWithResponseDisposition: to the task.  The reply
+ * may be sent at any time and from any thread.
+ */
+- (void) URLSession: (NSURLSession *)session
+  dataTask: (NSURLSessionDataTask *)dataTask
+  didReceiveResponse: (NSURLResponse *)response;
 
 @end
 

@@ -565,7 +565,6 @@ _find_main_bundle_for_tool(NSString *toolPath, NSString *toolName, BOOL *found)
   NSEnumerator 	*enumerator;
   NSString 	*best = nil;
   NSString 	*path;
-  NSString 	*tail;
   NSFileManager *fm = manager();
   BOOL 		isDir;
 
@@ -576,10 +575,6 @@ _find_main_bundle_for_tool(NSString *toolPath, NSString *toolName, BOOL *found)
       return nil;
     }
 
-  tail = [@"Tools" stringByAppendingPathComponent:
-    [@"Resources" stringByAppendingPathComponent: toolName]];
-
-
   /* We try to infer the domain that the tool is installed in from the
    * path to the tool, and if there is a resource bundle in that domain
    * we use it.
@@ -589,9 +584,9 @@ _find_main_bundle_for_tool(NSString *toolPath, NSString *toolName, BOOL *found)
     || [[NSSearchPathForDirectoriesInDomains(GSAdminToolsDirectory,
     NSUserDomainMask, YES) lastObject] isEqual: toolPath])
     {
-      path = [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+      path = [[NSSearchPathForDirectoriesInDomains(GSResourcesDirectory,
 	NSUserDomainMask, YES) firstObject]
-	stringByAppendingPathComponent: tail];
+        stringByAppendingPathComponent: toolName];
       if ([fm fileExistsAtPath: path  isDirectory: &isDir]  &&  isDir)
 	{
 	  if (found) *found = YES;
@@ -605,9 +600,9 @@ _find_main_bundle_for_tool(NSString *toolPath, NSString *toolName, BOOL *found)
     || [[NSSearchPathForDirectoriesInDomains(GSAdminToolsDirectory,
     NSLocalDomainMask, YES) lastObject] isEqual: toolPath])
     {
-      path = [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+      path = [[NSSearchPathForDirectoriesInDomains(GSResourcesDirectory,
 	NSLocalDomainMask, YES) firstObject]
-	stringByAppendingPathComponent: tail];
+        stringByAppendingPathComponent: toolName];
       if ([fm fileExistsAtPath: path  isDirectory: &isDir]  &&  isDir)
 	{
 	  if (found) *found = YES;
@@ -621,9 +616,9 @@ _find_main_bundle_for_tool(NSString *toolPath, NSString *toolName, BOOL *found)
     || [[NSSearchPathForDirectoriesInDomains(GSAdminToolsDirectory,
     NSNetworkDomainMask, YES) lastObject] isEqual: toolPath])
     {
-      path = [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+      path = [[NSSearchPathForDirectoriesInDomains(GSResourcesDirectory,
 	NSNetworkDomainMask, YES) firstObject]
-	stringByAppendingPathComponent: tail];
+        stringByAppendingPathComponent: toolName];
       if ([fm fileExistsAtPath: path  isDirectory: &isDir]  &&  isDir)
 	{
 	  if (found) *found = YES;
@@ -637,9 +632,9 @@ _find_main_bundle_for_tool(NSString *toolPath, NSString *toolName, BOOL *found)
     || [[NSSearchPathForDirectoriesInDomains(GSAdminToolsDirectory,
     NSSystemDomainMask, YES) lastObject] isEqual: toolPath])
     {
-      path = [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+      path = [[NSSearchPathForDirectoriesInDomains(GSResourcesDirectory,
 	NSSystemDomainMask, YES) firstObject]
-	stringByAppendingPathComponent: tail];
+        stringByAppendingPathComponent: toolName];
       if ([fm fileExistsAtPath: path  isDirectory: &isDir]  &&  isDir)
 	{
 	  if (found) *found = YES;
@@ -650,12 +645,12 @@ _find_main_bundle_for_tool(NSString *toolPath, NSString *toolName, BOOL *found)
   /* No exact match for resource bundle found, so check all domains to see
    * if we can find the resource bundle.
    */
-  paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+  paths = NSSearchPathForDirectoriesInDomains(GSResourcesDirectory,
     NSAllDomainsMask, YES);
   enumerator = [paths objectEnumerator];
   while ((path = [enumerator nextObject]))
     {
-      path = [path stringByAppendingPathComponent: tail];
+      path = [path stringByAppendingPathComponent: toolName];
       if ([fm fileExistsAtPath: path  isDirectory: &isDir]  &&  isDir)
 	{
 	  if (found) *found = YES;
@@ -1770,6 +1765,63 @@ GSPrivateInfoDictionary(NSString *rootPath)
   return info;
 }
 
+/* Load the language alias and canonical maps used by altLang().
+ *
+ * The maps are resources of the gnustep-base library bundle, but that bundle
+ * is not always present (on Android the library resources are packaged as
+ * application assets rather than being installed in a library domain), so we
+ * fall back to searching the main bundle for them.
+ *
+ * NB. This must not be called before the resources of the bundle being
+ * searched are readable: on Android that is only the case once the asset
+ * manager has been set, which is why +initialize does not call this there.
+ */
+static void
+loadLanguageMaps(void)
+{
+  NSString	*rootPath;
+  NSString	*file;
+
+  /* A nil rootPath makes GSPrivateResourcePath() search the main bundle,
+   * which is what we want when there is no library bundle.
+   */
+  rootPath = [_gnustep_bundle bundlePath];
+
+  /* The Locale aliases map converts canonical names to old-style names
+   */
+  file = GSPrivateResourcePath(@"Locale", @"aliases",
+    rootPath, @"Languages", NOT_LOCALIZED);
+  if (file != nil)
+    {
+      NSDictionary  *d;
+
+      d = [[NSDictionary alloc] initWithContentsOfFile: file];
+      if ([d count] > 0)
+	{
+	  ASSIGN(langAliases, d);
+	}
+      [d release];
+    }
+
+  /* The Locale canonical map converts old-style names to ISO 639 names
+   * and converts ISO 639-2 names to the preferred ISO 639-1 names where
+   * an ISO 639-1 name exists.
+   */
+  file = GSPrivateResourcePath(@"Locale", @"canonical",
+    rootPath, @"Languages", NOT_LOCALIZED);
+  if (file != nil)
+    {
+      NSDictionary  *d;
+
+      d = [[NSDictionary alloc] initWithContentsOfFile: file];
+      if ([d count] > 0)
+	{
+	  ASSIGN(langCanonical, d);
+	}
+      [d release];
+    }
+}
+
 @implementation NSBundle
 
 + (void) atExit
@@ -1801,7 +1853,6 @@ GSPrivateInfoDictionary(NSString *rootPath)
   if (self == [NSBundle class])
     {
       NSAutoreleasePool *pool = [NSAutoreleasePool new];
-      NSString          *file;
       const char	*mode;
       NSDictionary	*env;
       NSString		*str;
@@ -1924,39 +1975,13 @@ GSPrivateInfoDictionary(NSString *rootPath)
       _gnustep_bundle = RETAIN([self bundleForLibrary: @"gnustep-base"
 					      version: _base_version]);
 
-      /* The Locale aliases map converts canonical names to old-style names
+#ifndef __ANDROID__
+      /* Load the language maps. On Android no bundle resources are readable
+       * until the asset manager has been set, so this is done in
+       * +setJavaAssetManager:withJNIEnv: instead.
        */
-      file = GSPrivateResourcePath(@"Locale", @"aliases",
-        [_gnustep_bundle bundlePath], @"Languages", NOT_LOCALIZED);
-      if (file != nil)
-        {
-          NSDictionary  *d;
-
-          d = [[NSDictionary alloc] initWithContentsOfFile: file];
-          if ([d count] > 0)
-            {
-              ASSIGN(langAliases, d);
-            }
-          [d release];
-        }
-
-      /* The Locale canonical map converts old-style names to ISO 639 names
-       * and converts ISO 639-2 names to the preferred ISO 639-1 names where
-       * an ISO 639-1 name exists.
-       */
-      file = GSPrivateResourcePath(@"Locale", @"canonical",
-        [_gnustep_bundle bundlePath], @"Languages", NOT_LOCALIZED);
-      if (file != nil)
-        {
-          NSDictionary  *d;
-
-          d = [[NSDictionary alloc] initWithContentsOfFile: file];
-          if ([d count] > 0)
-            {
-              ASSIGN(langCanonical, d);
-            }
-          [d release];
-        }
+      loadLanguageMaps();
+#endif
 
 #if 0
       _loadingBundle = [self mainBundle];
@@ -3725,8 +3750,24 @@ IF_NO_ARC(
   // get native asset manager (may be shared across multiple threads)
   _assetManager = AAssetManager_fromJava(env, _jassetManager);
 
-  // clean main bundle path cache in case it was accessed before
-  [_mainBundle cleanPathCache];
+  /* Any resource lookup made before the asset manager was available failed
+   * and cached that failure, so the whole cache has to go: the entries are
+   * not necessarily those of the main bundle, and the main bundle may not
+   * even have been created yet, in which case -cleanPathCache would be a
+   * no-op and the stale entries would make every later lookup fail.
+   */
+  [pathCacheLock lock];
+  [pathCache removeAllObjects];
+  [pathCacheLock unlock];
+
+  /* Ensure the main bundle exists, as assets are located relative to its
+   * resource path, and discard its info dictionary and localizations, which
+   * may have been cached while its resources were unreadable.
+   */
+  [[self mainBundle] cleanPathCache];
+
+  // now that bundle resources are readable, load the language maps
+  loadLanguageMaps();
 }
 
 + (AAsset *) assetForPath: (NSString *)path
